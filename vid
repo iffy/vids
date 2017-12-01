@@ -43,7 +43,7 @@ def combineVideos(filenames, output_filename):
     _, input_filename = tempfile.mkstemp()
     with io.open(input_filename, 'w') as fh:
         for filename in filenames:
-            fh.write("file '{0}'\n".format(filename))
+            fh.write(u"file '{0}'\n".format(filename))
     check_call([
         'ffmpeg',
         '-f', 'concat',
@@ -52,6 +52,7 @@ def combineVideos(filenames, output_filename):
         '-c', 'copy',
         output_filename,
     ])
+    os.remove(input_filename)
 
 def speedupVideo(filename, output, factor, adjust_framerate=True, smooth=False):
     ifactor = 1.0 / factor
@@ -193,7 +194,8 @@ def addmusic(video, audio, output):
 @click.option('--duration', '-d',
     default=2,
     type=int,
-    help="Seconds fade takes.")
+    help="Seconds fade takes.",
+    show_default=True)
 @click.argument('filename')
 @click.argument('output')
 def fadeout(filename, output, duration):
