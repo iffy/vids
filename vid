@@ -1,0 +1,203 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+import io
+import os
+import tempfile
+from subprocess import check_output, check_call
+import click
+
+
+def getDuration(filename):
+    return float(check_output([
+        'ffprobe',
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        filename,
+    ]))
+
+def getFrameRate(filename):
+    return check_output([
+        'ffprobe',
+        '-v', 'error',
+        '-show_entries', 'stream=r_frame_rate',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        filename,
+    ])
+
+def fr2float(x):
+    n, d = map(float, x.split('/'))
+    return n / d
+
+def convert2mp4(filename):
+    pre, ext = os.path.splitext(filename)
+    dst = '{0}.mp4'.format(pre)
+    check_call([
+        'ffmpeg',
+        '-i', filename,
+        dst,
+    ])
+
+def combineVideos(filenames, output_filename):
+    _, input_filename = tempfile.mkstemp()
+    with io.open(input_filename, 'w') as fh:
+        for filename in filenames:
+            fh.write("file '{0}'\n".format(filename))
+    check_call([
+        'ffmpeg',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', input_filename,
+        '-c', 'copy',
+        output_filename,
+    ])
+
+def speedupVideo(filename, output, factor, adjust_framerate=True, smooth=False):
+    ifactor = 1.0 / factor
+    current_fr = fr2float(getFrameRate(filename))
+    new_fr = int(current_fr * factor)
+    if new_fr > 60:
+        new_fr = 60
+
+    args = []
+    if smooth:
+        print('new framerate', new_fr)
+        args.extend([
+            '-filter:v', "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps={0}'".format(new_fr),
+        ])
+    else:
+        args.extend([
+            '-filter:v', 'setpts=%.2f*PTS' % (ifactor,),
+        ])
+        if adjust_framerate:
+            print('new framerate', new_fr)
+            args.extend(['-r', str(int(new_fr))])
+    
+    check_call(['ffmpeg', '-i', filename] + args + [output])
+
+
+def shrinkToDuration(filename, output, target_duration, **kwargs):
+    current_duration = getDuration(filename)
+    factor = current_duration / target_duration
+    print('speedup factor:', factor)
+    return speedupVideo(filename, output, factor, **kwargs)
+
+
+def addMusicToVideo(video, audio, output):
+    check_call(['ffmpeg',
+        '-i', video,
+        '-i', audio,
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-shortest',
+        output,
+    ])
+
+def addFadeOut(filename, output, fade_duration=2):
+    duration = getDuration(filename)
+    start_time = int(duration) - fade_duration
+    check_call(['ffmpeg',
+        '-i', filename,
+        '-af', 'afade=t=out:st={start_time}:d={fade_duration}'.format(**locals()),
+        '-vf', 'fade=out:st={start_time}:d={fade_duration}'.format(**locals()),
+        output,
+    ])
+
+
+
+@click.group()
+def cli():
+    pass
+
+@cli.command()
+@click.option('--quiet', '-q', is_flag=True,
+    help="Suppress filename being output")
+@click.argument('filenames', nargs=-1)
+def duration(filenames, quiet):
+    """
+    Show duration of video in seconds.
+    """
+    for filename in filenames:
+        duration = getDuration(filename)
+        if quiet:
+            print(duration)
+        else:
+            print(filename, duration)
+
+@cli.command()
+@click.argument('filenames', nargs=-1)
+def tomp4(filenames):
+    """
+    Convert files to MP4 (named the same with mp4 extension)
+    """
+    for filename in filenames:
+        convert2mp4(filename)
+
+@cli.command()
+@click.argument('src', nargs=-1)
+@click.argument('dst', nargs=1)
+def concat(src, dst):
+    """
+    Combine videos into one.
+
+    Usage: SRC [SRC...] OUTPUT
+    """
+    combineVideos(src, dst)
+
+
+@cli.command()
+@click.option('-s', '--smooth',
+    is_flag=True,
+    help="Interpolate frames instead of just discarding them.")
+@click.option('-x', '--factor',
+    default=None,
+    type=float,
+    help="Amount to speed video up by.")
+@click.option('-d', '--duration',
+    default=None,
+    type=int,
+    help="Final video duration.")
+@click.argument('input')
+@click.argument('output')
+def speedup(input, output, factor, duration, smooth):
+    if not any([factor, duration]):
+        raise Exception("Must provide either --factor or --duration")
+    
+    print(input, output, factor, duration)
+
+    if factor:
+        speedupVideo(
+            filename=input,
+            output=output,
+            factor=factor,
+            smooth=smooth)
+    else:
+        shrinkToDuration(
+            filename=input,
+            output=output,
+            target_duration=duration,
+            smooth=smooth)
+
+@cli.command()
+@click.argument('video')
+@click.argument('audio')
+@click.argument('output')
+def addmusic(video, audio, output):
+    addMusicToVideo(video, audio, output)
+
+@cli.command()
+@click.option('--duration', '-d',
+    default=2,
+    type=int,
+    help="Seconds fade takes.")
+@click.argument('filename')
+@click.argument('output')
+def fadeout(filename, output, duration):
+    addFadeOut(filename, output, fade_duration=duration)
+
+if __name__ == '__main__':
+    cli()
