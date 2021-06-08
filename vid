@@ -27,7 +27,7 @@ def getFrameRate(filename):
     ])
 
 def fr2float(x):
-    n, d = map(float, x.split('/'))
+    n, d = map(float, x.split(b'/'))
     return n / d
 
 def convert2mp4(filename):
@@ -43,7 +43,8 @@ def combineVideos(filenames, output_filename):
     _, input_filename = tempfile.mkstemp()
     with io.open(input_filename, 'w') as fh:
         for filename in filenames:
-            fh.write(u"file '{0}'\n".format(filename))
+            fh.write(u"file '{0}'\n".format(os.path.abspath(filename)))
+    
     check_call([
         'ffmpeg',
         '-f', 'concat',
@@ -149,6 +150,37 @@ def concat(src, dst):
     """
     combineVideos(src, dst)
 
+@cli.command()
+@click.argument('input')
+@click.argument('output')
+@click.option('-t', '--threshold',
+    default=35,
+    type=int,
+    help="0-100 used to identify a 'black' pixel  Default: 35"
+)
+@click.option('-p', '--percent',
+    default=40,
+    type=int,
+    help="0-100 percent of pixels in a frame that will exclude it. Default: 40"
+)
+def rmblack(input, output, threshold, percent):
+    """
+    Remove black or nearly-black frames
+    """
+    print(input, output, threshold)
+    check_call(['ffmpeg',
+        '-i', input,
+        '-vf', "blackframe=amount=0:threshold={threshold},metadata=select:key='lavfi.blackframe.pblack':value={percent}:function=less,setpts=N/FRAME_RATE/TB".format(**locals()),
+        # '-vsync', 'drop',
+        # '-framerate', '25',
+        # '-c', 'copy',
+        # '-vf', '',
+        # '-safe', '0',
+        # '-r', '25',
+        # '-fflags', '+genpts',
+        # '-use_wallclock_as_timestamps', '1',
+        output,
+    ])
 
 @cli.command()
 @click.option('-s', '--smooth',
@@ -161,7 +193,7 @@ def concat(src, dst):
 @click.option('-d', '--duration',
     default=None,
     type=int,
-    help="Final video duration.")
+    help="Final video duration in seconds.")
 @click.argument('input')
 @click.argument('output')
 def speedup(input, output, factor, duration, smooth):
